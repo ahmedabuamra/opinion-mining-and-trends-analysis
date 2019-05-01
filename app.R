@@ -30,6 +30,7 @@ library(plyr)
 library(rsconnect)
 library(stringr)
 library(stringi)
+library(ggpubr)
 
 
 
@@ -37,6 +38,35 @@ library(stringi)
 # Define UI for application that draws a histogram
 ui <- navbarPage("Statisitcs Project",
                  
+                 tabPanel("Gold Price Predictor",
+                           titlePanel("Gold/USD price predictor using statistical inference"),
+                           sidebarLayout(
+                             sidebarPanel(
+                               numericInput("Year", "Enter Year", 2019),
+                               hr(),
+                               actionButton("predictBtn", "Predict")
+                             ),
+                             
+                             # Show a plot of the generated distribution
+                             mainPanel(
+                               tabsetPanel(
+                                 tabPanel("Prediction",
+                                          plotOutput("goldPriceScatterPlot"),
+                                          h3(textOutput("rCorr"), style="color: green"),
+                                          h3(textOutput("priceHat"), style="color: red"),
+                                          h3(textOutput("predictionValue"), style="color: green")
+                                          ),
+                                 tabPanel("Dataset",
+                                          dataTableOutput('pricePredictionTable')
+                                          
+                                          )
+                                 
+                                 
+                               )
+                             )
+                           )
+                           
+                  ),
                  
                  
                  
@@ -47,7 +77,7 @@ ui <- navbarPage("Statisitcs Project",
                           sidebarLayout(
                             sidebarPanel(
                               textInput("searchInput", "Enter Name","", placeholder = "Salah"),
-                              textInput("sampleSize", "Enter Sample Size (positive intger between 1:100)","", placeholder = "100"),
+                              textInput("sampleSize", "Enter Sample Size (positive integer between 1:1000)","", placeholder = "100"),
                               
                               hr(),
                               actionButton("searchBtn", "Analyze")
@@ -56,7 +86,17 @@ ui <- navbarPage("Statisitcs Project",
                             # Show a plot of the generated distribution
                             mainPanel(
                               tabsetPanel(
-                                tabPanel("Analysis", plotOutput("opinionHistPlot", height = "700px"), plotOutput("opinionPiePlot", width = "100%", height = "400px")),
+                                tabPanel("Analysis", 
+                                         plotOutput("opinionHistPlot", height = "700px"), 
+                                         h3(textOutput("meanWithNeutral")),  
+                                         h3(textOutput("meanWithoutNeutral")),
+                                         h5("If the mean is positive, then the public opinion is positive"),
+                                         h5("If the mean is negative, then the public opinion is negative"),
+                                         h5("If the mean is zero, then the public opinion is neutral"),
+                                         h2("Pie chart opinion visualization"),
+                                         plotOutput("opinionPiePlot", width = "100%", height = "400px")
+                                ),
+                                         
                                 tabPanel("Mined Tweets", dataTableOutput('tweetsTable'))
                               
                               )
@@ -174,6 +214,7 @@ displayTrendsData <- function(input, output, init){
   
   output$table <- renderDataTable(df)
   
+  
   output$trendsBars <- renderPlot(
     
     ggplot(df, aes(x=nameDF, y=volumeDF)) + geom_bar(stat="identity") + 
@@ -202,7 +243,7 @@ opinionMining <- function(input, output){
   
   setup_twitter_oauth(consumer_key = consumer_key, consumer_secret = consumer_secret, access_token = access_token, access_secret = access_secret)
   
-  tweets <- searchTwitter(input$searchInput, n = input$sampleSize, lang = "en")
+  tweets <- searchTwitter(paste(input$searchInput, " -filter:retweets"), n = input$sampleSize, lang = "en")
   tweets.df <-twListToDF(tweets)
   Tweets.text <- laply(tweets,function(t)t$getText())
   
@@ -211,16 +252,19 @@ opinionMining <- function(input, output){
   
   output$tweetsTable <- renderDataTable(tweets.df)
 
+  write.csv(tweets.df,'tweets.csv')
+  
+  
   
   # data manipulation 
   scores <- laply(Tweets.text, function(tweet, pos_list, neg_list) {
 
-    tweet <- gsub('https://','',tweet) # removes https://
-    tweet <- gsub('http://','',tweet) # removes http://
-    tweet <- gsub('[^[:graph:]]', ' ',tweet) ## removes graphic characters  #like emoticons 
-    tweet <- gsub('[[:punct:]]', '', tweet) # removes punctuation 
-    tweet <- gsub('[[:cntrl:]]', '', tweet) # removes control characters
-    tweet <- gsub('\\d+', '', tweet) # removes numbers
+    tweet <- gsub('https://','',tweet) 
+    tweet <- gsub('http://','',tweet) 
+    tweet <- gsub('[^[:graph:]]', ' ',tweet)
+    tweet <- gsub('[[:punct:]]', '', tweet)
+    tweet <- gsub('[[:cntrl:]]', '', tweet) 
+    tweet <- gsub('\\d+', '', tweet)
     tweet <- str_replace_all(tweet,"[^[:graph:]]", " ") 
     tweet <- stringi::stri_trans_general(tweet, "latin-ascii")
     tweet <- iconv(tweet, 'UTF-8', 'ASCII')
@@ -247,12 +291,12 @@ opinionMining <- function(input, output){
   
   scores.df <- data.frame(score=scores, text=tweets.df)
   
-  print(scores.df$score)
+  print(sum(scores.df$score) / (length(scores.df$score)))
 
   output$opinionHistPlot <- renderPlot({
     
     x <- scores.df$score
-    bins <- seq(-6, 5, by = 1)
+    bins <- seq(-5, 5, by = 1)
     
     ggplot(data=scores.df, aes(scores.df$score)) + 
       geom_histogram(aes(x), 
@@ -265,6 +309,13 @@ opinionMining <- function(input, output){
     
   })
   
+  output$meanWithNeutral <- renderText({ 
+    paste("Mean including neutral results = ", sprintf("%.3f", sum(scores.df$score) / (length(scores.df$score))))
+  })
+  
+  output$meanWithoutNeutral <- renderText({ 
+    paste("Mean excluding neutral results = ", sprintf("%.3f", sum(scores.df$score) / length(which(scores.df$score!=0))))
+  })
   
   output$opinionPiePlot <- renderPlot({
     pie(table(scores.df$score))
@@ -280,19 +331,68 @@ opinionMining <- function(input, output){
 
 
 
-
-
-
-
 # Define server logic required to draw a histogram
 server <- function(input, output) {
+  priceData <- read.csv("annual_csv.csv")
+  print(priceData)
+  output$goldPriceScatterPlot <- renderPlot({
+    ggscatter(priceData, x = "year", y = "price", 
+              add = "reg.line", conf.int = TRUE, 
+              cor.coef = TRUE, cor.method = "pearson",
+              xlab = "Year", ylab = "Gold Price per Ounce in US Dollar (USD)")
+    
+    
+  })
+  res <- cor.test(priceData$price, priceData$year, 
+                  method = "pearson")
+  
+  
+  output$pricePredictionTable <- renderDataTable(priceData)
+  output$rCorr <- renderText(paste("The pearson correlation coefficient (r) = ", sprintf("%.3f",res$estimate)))
+  
+  analysis <- lm(priceData$price ~ priceData$year)
+  sum <- summary(analysis)
+  
+  beta0 <- sum$coefficients[1]
+  beta1 <- sum$coefficients[2]
+  
+  firPart <- paste("Price-hat ( Year ) = ", sprintf("%.3f", beta0))
+  secPart <- paste(" + ", sprintf("%.3f", beta1))
+  con <- paste(firPart, secPart)
+  
+  output$priceHat <- renderText(
+    paste(con, " * ( Year )")
+    
+  )
+  
+  observeEvent(input$predictBtn, {
+    predictionVal <- beta0 + beta1 * input$Year
+    output$predictionValue <- renderText(
+      paste(paste("Price-hat = ", sprintf("%.3f",predictionVal)), " USD ")
+    )
+    
+  })
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+   
   displayTrendsData(input, output, TRUE)
   
   observeEvent(input$button, {
     displayTrendsData(input, output, FALSE)
   })
   
-  
+
+    
   observeEvent(input$searchBtn, {
     
     opinionMining(input, output)
